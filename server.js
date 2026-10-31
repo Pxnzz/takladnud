@@ -17,6 +17,7 @@ const sessions = new Map();
 const SESSION_TTL = 1000 * 60 * 60 * 24 * 7;
 const COOKIE_NAME = "takhlad_session";
 const CSRF_COOKIE = "takhlad_csrf";
+let adminSetupToken = null;
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "32kb" }));
@@ -26,6 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.static("public"));
+app.get("/admin-login", (req, res) => res.sendFile("index.html", { root: "public" }));
 
 function sendError(res, status, code, message, fields) {
   const error = { code, message };
@@ -47,14 +49,13 @@ function setCookies(res, cookies) {
   res.setHeader("Set-Cookie", [...values, ...cookies]);
 }
 
-function setSession(res, shopId) {
+function setSession(res, shopId, role = "shop") {
   const token = crypto.randomBytes(32).toString("hex");
   const csrfToken = crypto.randomBytes(24).toString("hex");
-  sessions.set(token, { shopId, csrfToken, expiresAt: Date.now() + SESSION_TTL });
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  sessions.set(token, { shopId, role, csrfToken, expiresAt: Date.now() + SESSION_TTL });
   setCookies(res, [
-    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}${secure}`,
-    `${CSRF_COOKIE}=${csrfToken}; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}${secure}`,
+    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}`,
+    `${CSRF_COOKIE}=${csrfToken}; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}`,
   ]);
 }
 
@@ -71,12 +72,24 @@ function requireCsrf(req, res, next) {
 function requireShop(req, res, next) {
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   const session = token && sessions.get(token);
-  if (!session || session.expiresAt <= Date.now()) {
+  if (!session || session.role !== "shop" || session.expiresAt <= Date.now()) {
     if (token) sessions.delete(token);
     return sendError(res, 401, "UNAUTHENTICATED", "กรุณาเข้าสู่ระบบก่อนใช้งาน");
   }
   req.shopId = session.shopId;
   req.sessionToken = token;
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+  const session = token && sessions.get(token);
+  if (!session || session.role !== "admin" || session.expiresAt <= Date.now()) {
+    if (token) sessions.delete(token);
+    return sendError(res, 401, "ADMIN_UNAUTHENTICATED", "กรุณาเข้าสู่ระบบผู้ดูแลระบบ");
+  }
+  req.sessionToken = token;
+  req.adminId = session.adminId;
   next();
 }
 
@@ -137,6 +150,9 @@ async function ensureSchema() {
       name VARCHAR(160) NOT NULL,
       description TEXT NULL,
       address VARCHAR(255) NULL,
+      province VARCHAR(80) NOT NULL DEFAULT 'ตาก',
+      latitude DECIMAL(10,7) NULL,
+      longitude DECIMAL(10,7) NULL,
       is_active TINYINT(1) NOT NULL DEFAULT 1,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -185,8 +201,74 @@ async function ensureSchema() {
       CONSTRAINT fk_bookings_session FOREIGN KEY (session_id) REFERENCES market_sessions(id) ON DELETE RESTRICT,
       CONSTRAINT fk_bookings_stall FOREIGN KEY (stall_id) REFERENCES stalls(id) ON DELETE RESTRICT
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    `CREATE TABLE IF NOT EXISTS admin_users (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      username VARCHAR(80) NOT NULL UNIQUE,
+      password_hash VARCHAR(255) NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   ];
   for (const statement of statements) await pool.query(statement);
+  // Upgrade existing classroom databases without removing market records.
+  const marketColumns = await pool.query("SHOW COLUMNS FROM markets");
+  const existingMarketColumns = new Set(marketColumns.map((column) => column.Field));
+  if (!existingMarketColumns.has("province")) await pool.query("ALTER TABLE markets ADD COLUMN province VARCHAR(80) NOT NULL DEFAULT 'ตาก'");
+  if (!existingMarketColumns.has("latitude")) await pool.query("ALTER TABLE markets ADD COLUMN latitude DECIMAL(10,7) NULL");
+  if (!existingMarketColumns.has("longitude")) await pool.query("ALTER TABLE markets ADD COLUMN longitude DECIMAL(10,7) NULL");
+  const admins = await pool.query("SELECT id FROM admin_users LIMIT 1");
+  if (!admins.length) {
+    adminSetupToken = crypto.randomBytes(24).toString("hex");
+    console.log(`ADMIN FIRST-TIME SETUP CODE: ${adminSetupToken}`);
+  } else {
+    adminSetupToken = null;
+  }
+}
+
+async function ensureSampleData() {
+  const marketName = "ตลาดชุมชนตัวอย่าง";
+  let markets = await pool.query("SELECT id FROM markets WHERE name = ? LIMIT 1", [marketName]);
+  let marketId;
+  if (markets.length) {
+    marketId = markets[0].id;
+  } else {
+    const inserted = await pool.query("INSERT INTO markets (name, description, address, province, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?)", [marketName, "ตลาดทดลองสำหรับค้นหาร้านและทดสอบการจองแผง", "ลานกิจกรรมชุมชน จังหวัดตาก", "ตาก", 16.8839, 99.1259]);
+    marketId = inserted.insertId;
+  }
+  await pool.query("UPDATE markets SET province = 'ตาก', latitude = COALESCE(latitude, 16.8839), longitude = COALESCE(longitude, 99.1259) WHERE id = ?", [marketId]);
+
+  const sessionName = "รอบทดลองจองแผง";
+  let sessionsFound = await pool.query("SELECT id FROM market_sessions WHERE market_id = ? AND session_name = ? LIMIT 1", [marketId, sessionName]);
+  let sessionId;
+  if (sessionsFound.length) {
+    sessionId = sessionsFound[0].id;
+  } else {
+    const inserted = await pool.query(
+      "INSERT INTO market_sessions (market_id, session_name, starts_at, ends_at, booking_opens_at, booking_closes_at, status) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY), DATE_ADD(NOW(), INTERVAL 7 DAY) + INTERVAL 6 HOUR, DATE_SUB(NOW(), INTERVAL 1 DAY), DATE_ADD(NOW(), INTERVAL 30 DAY), 'open')",
+      [marketId, sessionName],
+    );
+    sessionId = inserted.insertId;
+  }
+
+  const stalls = [
+    ["A01", "โซนอาหาร", "2 x 2 เมตร", 250, 0.16, 0.24],
+    ["A02", "โซนอาหาร", "2 x 2 เมตร", 250, 0.38, 0.24],
+    ["A03", "โซนอาหาร", "2 x 2 เมตร", 300, 0.60, 0.24],
+    ["A04", "โซนอาหาร", "2 x 2 เมตร", 300, 0.82, 0.24],
+    ["B01", "โซนงานฝีมือ", "2 x 2 เมตร", 200, 0.16, 0.52],
+    ["B02", "โซนงานฝีมือ", "2 x 2 เมตร", 200, 0.38, 0.52],
+    ["B03", "โซนงานฝีมือ", "2 x 2 เมตร", 220, 0.60, 0.52],
+    ["B04", "โซนงานฝีมือ", "2 x 2 เมตร", 220, 0.82, 0.52],
+    ["C01", "โซนของใช้", "2 x 2 เมตร", 180, 0.16, 0.80],
+    ["C02", "โซนของใช้", "2 x 2 เมตร", 180, 0.38, 0.80],
+    ["C03", "โซนของใช้", "2 x 2 เมตร", 200, 0.60, 0.80],
+    ["C04", "โซนของใช้", "2 x 2 เมตร", 200, 0.82, 0.80],
+  ];
+  for (const [code, zone, size, price, mapX, mapY] of stalls) {
+    await pool.query("INSERT IGNORE INTO stalls (market_id, stall_code, zone, size_description, price, map_x, map_y) VALUES (?, ?, ?, ?, ?, ?, ?)", [marketId, code, zone, size, price, mapX, mapY]);
+  }
+  console.log(`Sample market ready: ${marketName}, session ${sessionId}, ${stalls.length} stalls`);
 }
 
 app.get("/api/health", async (req, res) => {
@@ -204,8 +286,9 @@ app.get("/api/markets", async (req, res) => {
     const q = String(req.query.q || "").trim();
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
-    const rows = await pool.query("SELECT id, name, description, address, is_active FROM markets WHERE is_active = 1 AND (? = '' OR name LIKE ?) ORDER BY name LIMIT ? OFFSET ?", [q, `%${q}%`, limit, offset]);
-    const count = await pool.query("SELECT COUNT(*) AS total FROM markets WHERE is_active = 1 AND (? = '' OR name LIKE ?)", [q, `%${q}%`]);
+    const province = String(req.query.province || "").trim();
+    const rows = await pool.query("SELECT id, name, description, address, province, latitude, longitude, is_active FROM markets WHERE is_active = 1 AND (? = '' OR name LIKE ?) AND (? = '' OR province = ?) ORDER BY name LIMIT ? OFFSET ?", [q, `%${q}%`, province, province, limit, offset]);
+    const count = await pool.query("SELECT COUNT(*) AS total FROM markets WHERE is_active = 1 AND (? = '' OR name LIKE ?) AND (? = '' OR province = ?)", [q, `%${q}%`, province, province]);
     res.json({ items: rows.map((row) => ({ ...row, id: Number(row.id), is_active: Boolean(row.is_active) })), pagination: { limit, offset, total: Number(count[0].total) } });
   } catch (error) {
     console.error("Market list failed:", error.message);
@@ -217,7 +300,7 @@ app.get("/api/markets/:marketId", async (req, res) => {
   const marketId = positiveId(req.params.marketId);
   if (!marketId) return sendError(res, 400, "INVALID_ID", "รหัสตลาดไม่ถูกต้อง");
   try {
-    const rows = await pool.query("SELECT id, name, description, address, is_active FROM markets WHERE id = ? AND is_active = 1", [marketId]);
+    const rows = await pool.query("SELECT id, name, description, address, province, latitude, longitude, is_active FROM markets WHERE id = ? AND is_active = 1", [marketId]);
     if (!rows.length) return sendError(res, 404, "MARKET_NOT_FOUND", "ไม่พบตลาดนี้");
     res.json({ market: { ...rows[0], id: Number(rows[0].id), is_active: Boolean(rows[0].is_active) } });
   } catch (error) {
@@ -232,7 +315,7 @@ app.get("/api/markets/:marketId/sessions", async (req, res) => {
   try {
     const from = req.query.from ? String(req.query.from) : null;
     const to = req.query.to ? String(req.query.to) : null;
-    if ((from && !/^\\d{4}-\\d{2}-\\d{2}$/.test(from)) || (to && !/^\\d{4}-\\d{2}-\\d{2}$/.test(to))) return sendError(res, 422, "VALIDATION_ERROR", "รูปแบบวันที่ต้องเป็น YYYY-MM-DD");
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))) return sendError(res, 422, "VALIDATION_ERROR", "รูปแบบวันที่ต้องเป็น YYYY-MM-DD");
     const rows = await pool.query("SELECT id, market_id, session_name, starts_at, ends_at, booking_opens_at, booking_closes_at, status FROM market_sessions WHERE market_id = ? AND status IN ('open','closed','completed') AND (? IS NULL OR DATE(starts_at) >= ?) AND (? IS NULL OR DATE(starts_at) <= ?) ORDER BY starts_at", [marketId, from, from, to, to]);
     res.json({ items: rows.map((row) => ({ ...row, id: Number(row.id), market_id: Number(row.market_id) })) });
   } catch (error) {
@@ -316,9 +399,9 @@ app.post("/api/shop/register", async (req, res) => {
 });
 
 app.post("/api/shop/login", async (req, res) => {
-  const phone = typeof req.body?.phone === "string" ? req.body.phone.replace(/[\\s()-]/g, "") : "";
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.replace(/[\s()-]/g, "") : "";
   const password = req.body?.password;
-  if (!/^\\+?\\d{9,15}$/.test(phone) || typeof password !== "string") return sendError(res, 422, "VALIDATION_ERROR", "กรุณากรอกเบอร์โทรศัพท์และรหัสผ่านให้ถูกต้อง");
+  if (!/^\+?\d{9,15}$/.test(phone) || typeof password !== "string") return sendError(res, 422, "VALIDATION_ERROR", "กรุณากรอกเบอร์โทรศัพท์และรหัสผ่านให้ถูกต้อง");
   try {
     const rows = await pool.query("SELECT id, password_hash, is_active FROM shops WHERE phone = ?", [phone]);
     const row = rows[0];
@@ -500,12 +583,189 @@ app.post("/api/shop/bookings/:bookingId/cancel", requireShop, requireCsrf, async
   }
 });
 
+const adminEntities = {
+  markets: { table: "markets", fields: ["name", "description", "address", "province", "latitude", "longitude", "is_active"], columns: "id, name, description, address, province, latitude, longitude, is_active, created_at" },
+  sessions: { table: "market_sessions", fields: ["market_id", "session_name", "starts_at", "ends_at", "booking_opens_at", "booking_closes_at", "status"], columns: "id, market_id, session_name, starts_at, ends_at, booking_opens_at, booking_closes_at, status, created_at" },
+  stalls: { table: "stalls", fields: ["market_id", "stall_code", "zone", "size_description", "price", "map_x", "map_y", "is_active"], columns: "id, market_id, stall_code, zone, size_description, price, map_x, map_y, is_active, created_at" },
+  shops: { table: "shops", fields: ["contact_name", "shop_name", "category", "description", "public_contact", "is_active"], columns: "id, phone, contact_name, shop_name, category, description, public_contact, is_active, created_at" },
+  bookings: { table: "bookings", fields: ["status", "decision_note"], columns: "id, shop_id, session_id, stall_id, status, shop_note, decision_note, created_at, updated_at" },
+};
+
+app.get("/api/admin/setup/status", async (req, res) => {
+  try {
+    const rows = await pool.query("SELECT COUNT(*) AS total FROM admin_users");
+    res.json({ needsSetup: Number(rows[0].total) === 0 });
+  } catch (error) { sendError(res, 503, "DATABASE_UNAVAILABLE", "ระบบฐานข้อมูลยังไม่พร้อมใช้งาน"); }
+});
+
+app.post("/api/admin/setup", async (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const password = req.body?.password;
+  const setupCode = req.body?.setup_code;
+  if (!adminSetupToken || typeof setupCode !== "string" || setupCode !== adminSetupToken) return sendError(res, 403, "INVALID_SETUP_CODE", "รหัสตั้งค่าครั้งแรกไม่ถูกต้อง หรือบัญชีผู้ดูแลถูกตั้งค่าแล้ว");
+  if (!/^[a-zA-Z0-9_.-]{3,80}$/.test(username) || typeof password !== "string" || password.length < 12 || password.length > 200) return sendError(res, 422, "VALIDATION_ERROR", "ชื่อผู้ใช้ต้องมี 3-80 ตัว และรหัสผ่านอย่างน้อย 12 ตัวอักษร");
+  try {
+    const salt = crypto.randomBytes(16);
+    const key = await new Promise((resolve, reject) => crypto.scrypt(password, salt, 64, (error, value) => error ? reject(error) : resolve(value)));
+    const result = await pool.query("INSERT INTO admin_users (username, password_hash) VALUES (?, ?)", [username, `scrypt$${salt.toString("hex")}$${key.toString("hex")}`]);
+    adminSetupToken = null;
+    const token = crypto.randomBytes(32).toString("hex");
+    const csrfToken = crypto.randomBytes(24).toString("hex");
+    sessions.set(token, { adminId: Number(result.insertId), role: "admin", csrfToken, expiresAt: Date.now() + SESSION_TTL });
+    setCookies(res, [`${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}`, `${CSRF_COOKIE}=${csrfToken}; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}`]);
+    res.status(201).json({ username });
+  } catch (error) { sendError(res, error.code === "ER_DUP_ENTRY" ? 409 : 500, "ADMIN_SETUP_FAILED", "ไม่สามารถตั้งค่าบัญชีผู้ดูแลได้"); }
+});
+
+app.post("/api/admin/login", async (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const password = req.body?.password;
+  try {
+    const rows = await pool.query("SELECT id, password_hash FROM admin_users WHERE username = ? AND is_active = 1", [username]);
+    const row = rows[0];
+    let valid = false;
+    if (row?.password_hash?.startsWith("scrypt$")) {
+      const [, saltHex, keyHex] = row.password_hash.split("$");
+      const expected = Buffer.from(keyHex, "hex");
+      const actual = await new Promise((resolve, reject) => crypto.scrypt(String(password || ""), Buffer.from(saltHex, "hex"), expected.length, (error, key) => error ? reject(error) : resolve(key)));
+      valid = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+    }
+    if (!row || !valid) return sendError(res, 401, "INVALID_CREDENTIALS", "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
+    const token = crypto.randomBytes(32).toString("hex");
+    const csrfToken = crypto.randomBytes(24).toString("hex");
+    sessions.set(token, { adminId: Number(row.id), role: "admin", csrfToken, expiresAt: Date.now() + SESSION_TTL });
+    setCookies(res, [`${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}`, `${CSRF_COOKIE}=${csrfToken}; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}`]);
+    res.json({ username });
+  } catch (error) { sendError(res, 500, "INTERNAL_ERROR", "ไม่สามารถเข้าสู่ระบบผู้ดูแลได้"); }
+});
+
+app.get("/api/admin/me", requireAdmin, async (req, res) => {
+  const rows = await pool.query("SELECT username FROM admin_users WHERE id = ?", [req.adminId]);
+  res.json({ username: rows[0]?.username || "admin" });
+});
+app.post("/api/admin/logout", requireAdmin, requireCsrf, (req, res) => {
+  sessions.delete(req.sessionToken);
+  setCookies(res, [`${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`, `${CSRF_COOKIE}=; SameSite=Lax; Path=/; Max-Age=0`]);
+  res.json({ ok: true });
+});
+app.get("/api/admin/overview", requireAdmin, async (req, res) => {
+  try {
+    const [markets, sessionsCount, stalls, shops, pending, bookings] = await Promise.all([
+      pool.query("SELECT COUNT(*) AS total FROM markets"), pool.query("SELECT COUNT(*) AS total FROM market_sessions"),
+      pool.query("SELECT COUNT(*) AS total FROM stalls"), pool.query("SELECT COUNT(*) AS total FROM shops"),
+      pool.query("SELECT COUNT(*) AS total FROM bookings WHERE status = 'pending'"), pool.query("SELECT COUNT(*) AS total FROM bookings"),
+    ]);
+    res.json({ markets: Number(markets[0].total), sessions: Number(sessionsCount[0].total), stalls: Number(stalls[0].total), shops: Number(shops[0].total), pending: Number(pending[0].total), bookings: Number(bookings[0].total) });
+  } catch (error) { sendError(res, 500, "INTERNAL_ERROR", "โหลดภาพรวมไม่สำเร็จ"); }
+});
+app.get("/api/admin/data/:entity", requireAdmin, async (req, res) => {
+  const entity = adminEntities[req.params.entity];
+  if (!entity) return sendError(res, 404, "UNKNOWN_ENTITY", "ไม่พบหมวดข้อมูลนี้");
+  try {
+    const sql = req.params.entity === "bookings"
+      ? `SELECT b.id, b.shop_id, b.session_id, b.stall_id, b.status, b.shop_note, b.decision_note, b.created_at, b.updated_at,
+          sh.shop_name, sh.contact_name, sh.phone, m.name AS market_name, ms.session_name, ms.starts_at,
+          s.stall_code, s.zone, s.price
+         FROM bookings b JOIN shops sh ON sh.id = b.shop_id
+         JOIN market_sessions ms ON ms.id = b.session_id JOIN markets m ON m.id = ms.market_id
+         JOIN stalls s ON s.id = b.stall_id ORDER BY (b.status = 'pending') DESC, b.created_at DESC LIMIT 500`
+      : `SELECT ${entity.columns} FROM ${entity.table} ORDER BY id DESC LIMIT 500`;
+    const rows = await pool.query(sql);
+    res.json({ items: rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === "bigint" ? Number(value) : value]))) });
+  } catch (error) { sendError(res, 500, "INTERNAL_ERROR", "โหลดข้อมูลไม่สำเร็จ"); }
+});
+app.post("/api/admin/data/:entity", requireAdmin, requireCsrf, async (req, res) => {
+  const entity = adminEntities[req.params.entity];
+  if (!entity) return sendError(res, 404, "UNKNOWN_ENTITY", "ไม่พบหมวดข้อมูลนี้");
+  const values = entity.fields.filter((field) => req.body?.[field] !== undefined);
+  if (!values.length || (req.params.entity === "shops" && (typeof req.body.password !== "string" || req.body.password.length < 12 || req.body.password.length > 200))) return sendError(res, 422, "VALIDATION_ERROR", "กรุณากรอกข้อมูลที่จำเป็น และรหัสผ่านร้านค้าต้องยาว 12-200 ตัวอักษร");
+  try {
+    if (req.params.entity === "shops") {
+      const salt = crypto.randomBytes(16);
+      const key = await new Promise((resolve, reject) => crypto.scrypt(String(req.body.password), salt, 64, (error, value) => error ? reject(error) : resolve(value)));
+      values.push("phone", "password_hash");
+      req.body.phone = String(req.body.phone || "").replace(/[\\s()-]/g, "");
+      req.body.password_hash = `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+    }
+    const result = await pool.query(`INSERT INTO ${entity.table} (${values.join(",")}) VALUES (${values.map(() => "?").join(",")})`, values.map((field) => req.body[field]));
+    res.status(201).json({ id: Number(result.insertId) });
+  } catch (error) { sendError(res, error.code === "ER_DUP_ENTRY" ? 409 : 422, "SAVE_FAILED", "บันทึกไม่สำเร็จ กรุณาตรวจสอบข้อมูลและรหัสที่อ้างอิง"); }
+});
+app.post("/api/admin/bookings/:bookingId/decision", requireAdmin, requireCsrf, async (req, res) => {
+  const bookingId = positiveId(req.params.bookingId);
+  const status = req.body?.status;
+  const note = req.body?.decision_note;
+  if (!bookingId || !["confirmed", "rejected"].includes(status)) return sendError(res, 422, "VALIDATION_ERROR", "เลือกการอนุมัติหรือปฏิเสธให้ถูกต้อง");
+  if (note != null && !validText(note, 500)) return sendError(res, 422, "VALIDATION_ERROR", "หมายเหตุต้องไม่เกิน 500 ตัวอักษร");
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const rows = await connection.query("SELECT id, session_id, stall_id, status FROM bookings WHERE id = ? FOR UPDATE", [bookingId]);
+    if (!rows.length) { await connection.rollback(); return sendError(res, 404, "BOOKING_NOT_FOUND", "ไม่พบคำขอจองนี้"); }
+    const booking = rows[0];
+    if (booking.status !== "pending") { await connection.rollback(); return sendError(res, 409, "BOOKING_ALREADY_DECIDED", "คำขอนี้ได้รับการจัดการไปแล้ว"); }
+    // Serialize decisions in this session so two pending requests cannot claim one stall.
+    await connection.query("SELECT id FROM market_sessions WHERE id = ? FOR UPDATE", [booking.session_id]);
+    if (status === "confirmed") {
+      const conflict = await connection.query("SELECT id FROM bookings WHERE session_id = ? AND stall_id = ? AND status = 'confirmed' AND id <> ? LIMIT 1 FOR UPDATE", [booking.session_id, booking.stall_id, bookingId]);
+      if (conflict.length) { await connection.rollback(); return sendError(res, 409, "STALL_UNAVAILABLE", "แผงนี้ได้รับการยืนยันให้ร้านอื่นแล้ว"); }
+    }
+    await connection.query("UPDATE bookings SET status = ?, decision_note = ? WHERE id = ?", [status, note?.trim() || null, bookingId]);
+    await connection.commit();
+    res.json({ ok: true, id: bookingId, status });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Admin booking decision failed:", error.message);
+    sendError(res, 500, "INTERNAL_ERROR", "บันทึกผลการพิจารณาไม่สำเร็จ");
+  } finally { if (connection) connection.release(); }
+});
+
+app.patch("/api/admin/data/:entity/:id", requireAdmin, requireCsrf, async (req, res) => {
+  const entity = adminEntities[req.params.entity];
+  const id = positiveId(req.params.id);
+  if (!entity || !id) return sendError(res, 400, "INVALID_REQUEST", "หมวดข้อมูลหรือรหัสไม่ถูกต้อง");
+  const fields = entity.fields.filter((field) => req.body?.[field] !== undefined);
+  const resetShopPassword = req.params.entity === "shops" && typeof req.body?.password === "string" && req.body.password.length > 0;
+  if (!fields.length && !resetShopPassword) return sendError(res, 422, "VALIDATION_ERROR", "ไม่มีข้อมูลที่แก้ไข");
+  if (resetShopPassword && req.body.password.length < 12) return sendError(res, 422, "VALIDATION_ERROR", "รหัสผ่านต้องมีอย่างน้อย 12 ตัวอักษร");
+  try {
+    if (resetShopPassword) {
+      const salt = crypto.randomBytes(16);
+      const key = await new Promise((resolve, reject) => crypto.scrypt(req.body.password, salt, 64, (error, value) => error ? reject(error) : resolve(value)));
+      fields.push("password_hash");
+      req.body.password_hash = `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+    }
+    if (req.params.entity === "bookings" && req.body.status === "confirmed") {
+      const conflict = await pool.query("SELECT id FROM bookings WHERE session_id = (SELECT session_id FROM bookings WHERE id = ?) AND stall_id = (SELECT stall_id FROM bookings WHERE id = ?) AND status = 'confirmed' AND id <> ? LIMIT 1", [id, id, id]);
+      if (conflict.length) return sendError(res, 409, "STALL_UNAVAILABLE", "แผงนี้ได้รับการยืนยันให้รายการอื่นแล้ว");
+    }
+    const result = await pool.query(`UPDATE ${entity.table} SET ${fields.map((field) => `${field} = ?`).join(", ")} WHERE id = ?`, [...fields.map((field) => req.body[field]), id]);
+    if (!result.affectedRows) return sendError(res, 404, "NOT_FOUND", "ไม่พบรายการนี้");
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error.code === "ER_DUP_ENTRY" ? 409 : 422, "UPDATE_FAILED", "แก้ไขไม่สำเร็จ กรุณาตรวจสอบข้อมูล"); }
+});
+app.delete("/api/admin/data/:entity/:id", requireAdmin, requireCsrf, async (req, res) => {
+  const entity = adminEntities[req.params.entity];
+  const id = positiveId(req.params.id);
+  if (!entity || !id) return sendError(res, 400, "INVALID_REQUEST", "หมวดข้อมูลหรือรหัสไม่ถูกต้อง");
+  try {
+    let result;
+    if (["markets", "stalls", "shops"].includes(req.params.entity)) result = await pool.query(`UPDATE ${entity.table} SET is_active = 0 WHERE id = ?`, [id]);
+    else if (req.params.entity === "bookings") result = await pool.query("UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status IN ('pending','confirmed')", [id]);
+    else return sendError(res, 409, "DELETE_NOT_ALLOWED", "รอบตลาดที่มีข้อมูลอ้างอิงไม่สามารถลบได้ ให้เปลี่ยนสถานะแทน");
+    if (!result.affectedRows) return sendError(res, 404, "NOT_FOUND", "ไม่พบรายการนี้");
+    res.json({ ok: true });
+  } catch (error) { sendError(res, 500, "DELETE_FAILED", "ไม่สามารถปิดใช้งานรายการนี้ได้"); }
+});
+
 app.use("/api", (req, res) => sendError(res, 404, "NOT_FOUND", "ไม่พบ API นี้"));
 
 async function start() {
   try {
     await ensureSchema();
-    app.listen(port, () => console.log(`Server listening at http://localhost:${port}`));
+    await ensureSampleData();
+    app.listen(3201, () => console.log(`Server listening at http://localhost:${port}`));
   } catch (error) {
     console.error("Database schema initialization failed:", error.message);
     process.exitCode = 1;
