@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#edf3e9">
+  <meta name="description" content="ตากหลาดนัด จองแผงและวางแผนเดินตลาดได้ง่าย ๆ">
+  <title>ตากหลาดนัด | ตลาดที่นัดกันไว้</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/index.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#home" aria-label="ตากหลาดนัด หน้าแรก"><span class="brand-mark">ต</span><span>ตากหลาดนัด<small>ตลาดที่นัดกันไว้</small></span></a>
+    <nav class="top-nav" aria-label="เมนูหลัก"><a href="#map">ผังตลาด</a><a href="#shop">สำหรับร้านค้า</a></nav>
+    <button class="button button-outline header-login" data-action="open-auth">เข้าสู่ระบบร้านค้า</button>
+  </header>
+  <main id="home">
+    <section class="hero wrap">
+      <div class="hero-copy"><p class="eyebrow"><span></span> ตลาดนัดใกล้บ้าน เดินง่าย จองสะดวก</p><h1>นัดกันมา<br><em>เจอกันที่ตลาด</em></h1><p class="hero-text">พื้นที่ของร้านค้าชุมชน ให้พ่อค้าแม่ค้าจองแผงได้เป็นระบบ และให้ทุกคนค้นหาร้านโปรดก่อนออกเดินทาง</p><div class="hero-actions"><a class="button button-primary" href="#map">สำรวจผังตลาด <span>↗</span></a><button class="button button-soft" data-action="open-auth">ฉันเป็นร้านค้า</button></div><div class="trust-note"><span class="mini-leaves">✳</span> ใช้ง่าย สบายตา เปิดดูได้ทุกอุปกรณ์</div></div>
+      <div class="hero-art" aria-label="ภาพประกอบบรรยากาศตลาดชุมชน"><div class="sun"></div><div class="hill hill-back"></div><div class="hill hill-front"></div><div class="market-card"><span class="market-card-icon">⌂</span><div><strong>ตลาดนัดชุมชน</strong><small>พบร้านอร่อยและของดีใกล้บ้าน</small></div><span class="tiny-arrow">↗</span></div><div class="art-label label-one">ของดีจากชุมชน</div><div class="art-label label-two">แวะได้ทุกวัย</div></div>
+    </section>
+    <section class="market-section" id="map"><div class="wrap"><div class="section-heading"><div><p class="eyebrow">MARKET GUIDE</p><h2>เลือกตลาดที่อยากไป</h2><p class="section-intro">เลือกวันนัด แล้วดูผังร้านค้าก่อนออกเดินทาง</p></div><div class="market-picker"><label for="market-select">ตลาด</label><select id="market-select"><option value="">กำลังโหลดตลาด...</option></select></div></div>
+      <div class="market-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="public-search" type="search" placeholder="ค้นหาร้านหรือสินค้า" aria-label="ค้นหาร้านหรือสินค้า"></label><label class="select-box"><span class="sr-only">รอบตลาด</span><select id="session-select"><option value="">เลือกรอบตลาด</option></select></label><label class="select-box"><span class="sr-only">ประเภทสินค้า</span><select id="category-filter"><option value="">ทุกประเภทสินค้า</option></select></label><label class="select-box"><span class="sr-only">โซน</span><select id="zone-filter"><option value="">ทุกโซน</option></select></label><button class="button button-outline clear-filters" data-action="clear-filters">ล้างตัวกรอง</button></div>
+      <div class="guide-grid"><section class="map-panel" aria-labelledby="map-title"><div class="panel-heading"><div><h3 id="map-title">ผังร้านค้า</h3><p id="session-caption">เลือกรอบตลาดเพื่อดูตำแหน่งร้านค้า</p></div><span class="live-tag"><i></i> ผังตลาด</span></div><div id="map-canvas" class="map-canvas" role="region" aria-label="ผังแผงตลาด"><div class="map-empty">เลือกตลาดและรอบตลาด เพื่อแสดงผังร้านค้า</div></div><div class="map-legend"><span><i class="legend-dot available"></i> ว่าง</span><span><i class="legend-dot occupied"></i> มีร้านค้า</span></div></section>
+      <aside class="shops-panel"><div class="panel-heading"><div><h3>ร้านค้าในตลาด</h3><p id="shop-count">กำลังรอเลือกรอบตลาด</p></div><span class="count-badge" id="count-badge">0</span></div><div id="shop-list" class="shop-list"><div class="list-empty">ร้านค้าที่จองแผงยืนยันแล้วจะแสดงที่นี่</div></div></aside></div>
+      <p id="page-message" class="page-message" role="status" aria-live="polite"></p>
+    </div></section>
+    <section class="shop-cta wrap" id="shop"><div class="cta-decoration" aria-hidden="true">✿</div><div><p class="eyebrow">FOR LOCAL SELLERS</p><h2>มีร้านอยู่แล้วใช่ไหม?</h2><p>เข้าร่วมตลาด เลือกแผงที่เหมาะกับร้าน แล้วติดตามคำขอจองได้ในที่เดียว</p></div><button class="button button-primary" data-action="open-auth">เริ่มต้นสำหรับร้านค้า <span>→</span></button></section>
+  </main>
+  <footer class="site-footer"><a class="brand footer-brand" href="#home"><span class="brand-mark">ต</span><span>ตากหลาดนัด<small>ตลาดที่นัดกันไว้</small></span></a><span>พื้นที่ดี ๆ ของร้านค้าและชุมชน</span><span class="footer-status"><i></i><b id="status-title">กำลังตรวจสอบระบบ</b></span></footer>
+  <dialog id="auth-dialog" class="auth-dialog"><form method="dialog"><button class="dialog-close" aria-label="ปิด">×</button></form><div class="auth-content"><p class="eyebrow">SHOP ACCOUNT</p><h2 id="auth-title">ยินดีต้อนรับกลับ</h2><p id="auth-description" class="auth-description">เข้าสู่ระบบเพื่อจัดการข้อมูลร้านและการจองแผง</p><div class="auth-tabs"><button class="auth-tab active" data-auth-mode="login">เข้าสู่ระบบ</button><button class="auth-tab" data-auth-mode="register">สมัครร้านค้า</button></div><form id="auth-form" novalidate><div id="register-fields" hidden><label>ชื่อผู้ติดต่อ<input name="contact_name" autocomplete="name" maxlength="120"></label><label>ชื่อร้าน<input name="shop_name" maxlength="160"></label><label>ประเภทสินค้า<input name="category" maxlength="100" placeholder="เช่น อาหาร งานฝีมือ"></label></div><label>เบอร์โทรศัพท์<input name="phone" type="tel" inputmode="tel" autocomplete="tel" required></label><label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required minlength="10"></label><p id="auth-message" class="form-message" role="alert"></p><button id="auth-submit" class="button button-primary auth-submit" type="submit">เข้าสู่ระบบ</button></form></div></dialog>
+  <dialog id="shop-dialog" class="detail-dialog"><form method="dialog"><button class="dialog-close" aria-label="ปิด">×</button></form><div id="shop-detail"></div></dialog>
+  <nav class="mobile-nav" aria-label="เมนูมือถือ"><a href="#home"><span>⌂</span>หน้าแรก</a><a href="#map"><span>▦</span>ผังตลาด</a><button data-action="open-auth"><span>♧</span>ร้านค้า</button></nav>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "std04-classroom-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Beginner Express and MariaDB classroom project",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "mariadb": "^3.4.0"
+  }
+}
