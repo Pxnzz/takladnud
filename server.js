@@ -765,7 +765,7 @@ async function start() {
   try {
     await ensureSchema();
     await ensureSampleData();
-    app.listen(3201, () => console.log(`Server listening at http://localhost:${port}`));
+    app.listen(3104, () => console.log(`Server listening at http://localhost:${port}`));
   } catch (error) {
     console.error("Database schema initialization failed:", error.message);
     process.exitCode = 1;
